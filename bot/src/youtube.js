@@ -141,11 +141,43 @@ export class YouTube {
     }
   }
   async feeds() {
+    const failures = [];
     for (const creator of this.s.all('SELECT * FROM creators')) {
-      const r = await this.fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${creator.channel_id}`, { signal: AbortSignal.timeout(15000) });
-      if (!r.ok) throw new Error(`YouTube feed unavailable (HTTP ${r.status}).`);
-      this.ingest(feedEntries(await r.text()).filter(e => e.channel === creator.channel_id));
+      try {
+        const r = await this.fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${creator.channel_id}`, { signal: AbortSignal.timeout(15000) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        this.ingest(feedEntries(await r.text()).filter(e => e.channel === creator.channel_id));
+        this.s.set(`feedError:${creator.channel_id}`,null);
+        continue;
+      } catch { /* A missing or temporarily unavailable feed can use the uploads API instead. */ }
+      const key = `feedFallback:${creator.channel_id}`;
+      if (this.s.get(key,0) > Date.now()) {
+        const previousError = this.s.get(`feedError:${creator.channel_id}`);
+        if (previousError) failures.push(previousError);
+        continue;
+      }
+      // Reserve before requesting, including failed attempts; persisted across deployments.
+      this.s.set(key,Date.now()+30*60000);
+      try {
+        const data=JSON.parse(creator.data);
+        let playlistId=data.uploadPlaylistId;
+        if (!playlistId) {
+          const [channel]=await this.api('channels',{part:'contentDetails',id:creator.channel_id});
+          playlistId=channel?.contentDetails?.relatedPlaylists?.uploads;
+          if (!playlistId) throw new Error('The channel has no available uploads playlist.');
+          this.s.run('UPDATE creators SET data=json_set(data,\'$.uploadPlaylistId\',?) WHERE channel_id=?',playlistId,creator.channel_id);
+        }
+        const items=await this.api('playlistItems',{part:'contentDetails',playlistId,maxResults:50});
+        this.ingest(items.map(v=>({video:v.contentDetails?.videoId,channel:creator.channel_id})).filter(e=>/^[\w-]{11}$/.test(e.video || '')));
+        this.s.set(`feedError:${creator.channel_id}`,null);
+      } catch (e) {
+        const error=`${creator.channel_id}: uploads API fallback failed (${e.message})`;
+        this.s.set(`feedError:${creator.channel_id}`,error);
+        failures.push(error);
+      }
     }
+    if (failures.length) throw new Error(`${failures.length} channel(s) could not refresh. ${failures[0]}`);
+    if (String(this.s.get('youtubeError','')).startsWith('feeds:')) this.s.set('youtubeError',null);
   }
   ingest(entries, notification = false) {
     for (const e of entries) {
