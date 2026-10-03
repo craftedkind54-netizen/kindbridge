@@ -1,9 +1,0 @@
-node_modules/
-.env
-data/
-inspection/
-plugin/target/
-dist/
-*.log
-*.db*
-*.jar
