@@ -1,7 +1,0 @@
-*
-!package.json
-!package-lock.json
-!pnpm-lock.yaml
-!bot/
-!bot/src/
-!bot/src/**
