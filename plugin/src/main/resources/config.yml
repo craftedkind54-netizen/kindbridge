@@ -1,0 +1,11 @@
+# Your public Railway HTTPS URL. This plugin makes outbound requests only.
+railway-url: "https://YOUR-SERVICE.up.railway.app"
+# Match Railway BRIDGE_SECRET. Use a random value of at least 32 characters.
+bridge-secret: ""
+poll-seconds: 10
+application-url: "https://discord.com/channels/1555704317552361563/1555722797475561543"
+# Synchronize statistics into the supplied CreatorScoreboard 1.0.0.
+scoreboard-integration: true
+# Railway owns YouTube API calls. Clears the old plugin's API key and sets
+# its interval to 10080 minutes. No original JAR modification is needed.
+manage-scoreboard-youtube: true
