@@ -1,0 +1,13 @@
+name: KindSMPBridge
+version: 1.0.1
+main: dev.kindsmp.KindSMPBridge
+api-version: '1.21.11'
+description: Kind SMP applications, Floodgate whitelist and verified creator integration.
+softdepend: [floodgate, CreatorScoreboard]
+commands:
+  kindsmp:
+    description: Show Kind SMP connection status or application instructions.
+    usage: /kindsmp [status]
+permissions:
+  kindsmp.admin:
+    default: op
