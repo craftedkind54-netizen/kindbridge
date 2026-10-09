@@ -1,4 +1,6 @@
-# Kind SMP — bot 1.0.3
+# Kind SMP — bot 1.0.4
+
+Account-change upgrade: [Update 1.0.4](docs/UPDATE-1.0.4.md).
 
 Single-form upgrade: [Update 1.0.3](docs/UPDATE-1.0.3.md).
 
@@ -11,7 +13,8 @@ Start with [the setup guide](docs/SETUP.md). This is source code and a compiled 
 ## Included
 
 - One application form with Minecraft username, age, how you heard about us, why you want to join, and an optional YouTube channel link. Submitting confirms agreement to the SMP rules.
-- Minimum age 13, agreement to rules, one active application per Discord user and Minecraft account, and 24 hours before reapplying after rejection.
+- Minimum age 13, agreement to rules, one application awaiting review or whitelisting per Discord user and one active application per Minecraft account, and 24 hours before reapplying after rejection.
+- Accepted members can use `/apply` again for a different account. Current membership stays active during review; after successful whitelisting, the new account replaces the old application and receives any existing creator profile. Staff must remove the old whitelist entry if needed.
 - Staff-only approval and rejection; rejection requires a reason shown to the applicant.
 - Persistent approval queue. The plugin resolves the Java account or Floodgate gamertag, whitelists its UUID, and acknowledges completion. The bot then grants membership and sends joining instructions. `/status` works when DMs are closed.
 - Staff approval accepts the optional YouTube link. After whitelisting, the bot links it automatically without a description code or `/verify`. This does not independently verify ownership.
@@ -39,7 +42,7 @@ Start with [the setup guide](docs/SETUP.md). This is source code and a compiled 
 
 | Where | Command | Purpose |
 | --- | --- | --- |
-| Discord | `/apply` | Open the application |
+| Discord | `/apply` | Open the application, including for a new Minecraft account |
 | Discord | `/status` | See application decision, rejection reason or joining instructions |
 | Discord | `/youtube` | Check your automatically linked channel |
 | Discord, staff | `/link-youtube member: channel:` | Add or correct an accepted member’s channel link |
