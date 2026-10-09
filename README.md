@@ -1,4 +1,6 @@
-# Kind SMP — bot 1.0.4
+# Kind SMP — bot 1.0.5
+
+Private welcome-DM update: [Update 1.0.5](docs/UPDATE-1.0.5.md).
 
 Account-change upgrade: [Update 1.0.4](docs/UPDATE-1.0.4.md).
 
@@ -16,7 +18,7 @@ Start with [the setup guide](docs/SETUP.md). This is source code and a compiled 
 - Minimum age 13, agreement to rules, one application awaiting review or whitelisting per Discord user and one active application per Minecraft account, and 24 hours before reapplying after rejection.
 - Accepted members can use `/apply` again for a different account. Current membership stays active during review; after successful whitelisting, the new account replaces the old application and receives any existing creator profile. Staff must remove the old whitelist entry if needed.
 - Staff-only approval and rejection; rejection requires a reason shown to the applicant.
-- Persistent approval queue. The plugin resolves the Java account or Floodgate gamertag, whitelists its UUID, and acknowledges completion. The bot then grants membership and sends joining instructions. `/status` works when DMs are closed.
+- Persistent approval queue. The plugin resolves the Java account or Floodgate gamertag, whitelists its UUID, and acknowledges completion. The bot sends an approval DM with joining details, stating that whitelisting is pending. Once Minecraft confirms completion, it grants membership and sends the final welcome DM. `/status` works when DMs are closed.
 - Staff approval accepts the optional YouTube link. After whitelisting, the bot links it automatically without a description code or `/verify`. This does not independently verify ownership.
 - Linked creators receive the YouTuber role. Railway refreshes subscriber, upload and recent-video like totals initially and every seven days; the plugin imports them into CreatorScoreboard.
 - All public creator content is eligible. Ordinary videos and Shorts share your Shorts channel; scheduled and active streams have separate channels.
@@ -43,6 +45,8 @@ Start with [the setup guide](docs/SETUP.md). This is source code and a compiled 
 | Where | Command | Purpose |
 | --- | --- | --- |
 | Discord | `/apply` | Open the application, including for a new Minecraft account |
+| Discord | `/join` | Privately resend your approved server address and joining instructions |
+| Discord, staff | `/resend-welcome member:` | Retry an approved member’s private welcome DM |
 | Discord | `/status` | See application decision, rejection reason or joining instructions |
 | Discord | `/youtube` | Check your automatically linked channel |
 | Discord, staff | `/link-youtube member: channel:` | Add or correct an accepted member’s channel link |
