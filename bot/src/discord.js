@@ -9,14 +9,21 @@ const ephemeral = MessageFlags.Ephemeral;
 const button = (id, label, style = ButtonStyle.Primary) => new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style);
 const row = (...buttons) => new ActionRowBuilder().addComponents(buttons);
 function form(id, title, fields) {
-  return new ModalBuilder().setCustomId(id).setTitle(title).addLabelComponents(fields.map(([key, label, max, long, required = true]) =>
-    new LabelBuilder().setLabel(label).setTextInputComponent(new TextInputBuilder().setCustomId(key).setStyle(long ? TextInputStyle.Paragraph : TextInputStyle.Short).setMaxLength(max).setRequired(required))));
+  return new ModalBuilder().setCustomId(id).setTitle(title).addLabelComponents(fields.map(([key, label, max, long, required = true, description]) => {
+    const field = new LabelBuilder().setLabel(label).setTextInputComponent(new TextInputBuilder().setCustomId(key).setStyle(long ? TextInputStyle.Paragraph : TextInputStyle.Short).setMaxLength(max).setRequired(required));
+    if (description) field.setDescription(description);
+    return field;
+  }));
 }
-export const applicationForm = edition => form(`application:${edition}`, 'Kind SMP application · 1 of 2', [
-  ['username', edition === 'java' ? 'Minecraft Java username' : 'Xbox gamertag (no Floodgate prefix)', 16],
-  ['age', 'How old are you?', 3], ['rules', 'Will you follow the SMP rules? Enter Yes.', 20],
-  ['heard', 'How did you hear about us?', 1000, true], ['why', 'Why do you want to join?', 1000, true]
+export const applicationForm = edition => form(`application-single:${edition}`, 'Kind SMP application', [
+  ['username', edition === 'java' ? 'Minecraft Java username' : 'Xbox gamertag (no Floodgate prefix)', 16, false, true,
+    'By submitting this application, you agree to follow the SMP rules.'],
+  ['age', 'How old are you? (13 or older)', 3],
+  ['heard', 'How did you hear about us?', 1000, true],
+  ['why', 'Why do you want to join?', 1000, true],
+  ['youtube', 'YouTube channel link (optional)', 200, false, false]
 ]);
+// Only used to finish drafts opened before the single-form update.
 const youtubeForm = () => form('application:youtube', 'Kind SMP application · 2 of 2', [['youtube', 'YouTube channel link (optional)', 200, false, false]]);
 
 export function createDiscord(store, c, yt) {
@@ -78,17 +85,25 @@ export function createDiscord(store, c, yt) {
           const role = await guild.roles.fetch(roleId);
           if (!role || role.managed || me.roles.highest.comparePositionTo(role) <= 0 || !me.permissions.has(PermissionFlagsBits.ManageRoles)) throw new Error('Move the bot role above SMP Member and YouTuber, and give it Manage Roles.');
         }
-        const body = { content: `## Welcome to Kind SMP\nApply to join our Java and Bedrock SMP. You must be **13 or older**.\nRead <#${c.rules}> first. Answers are shared with staff in a private review channel.\nOne pending application per person. Reapply ${c.cooldown / 3600000} hours after rejection.\nYouTube is optional. The supplied channel is linked automatically after staff approval and whitelisting.`, components: [row(button('edition:java','Apply · Java'), button('edition:bedrock','Apply · Bedrock'))] };
+        const body = { content: `## Welcome to Kind SMP\nApply to join our Java and Bedrock SMP. You must be **13 or older**.\nRead <#${c.rules}> first. Answers are shared with staff in a private review channel.\nOne pending application per person. Reapply ${c.cooldown / 3600000} hours after rejection.\nApply and add your optional YouTube channel in one form. By submitting, you agree to follow the SMP rules. The supplied channel is linked automatically after staff approval and whitelisting.`, components: [row(button('edition:java','Apply · Java'), button('edition:bedrock','Apply · Bedrock'))] };
         const panelId = store.get('applicationPanel');
         if (panelId) { try { const ch = await client.channels.fetch(c.apply); const m = await ch.messages.fetch(panelId); await m.edit(body); return reply('Application panel updated.'); } catch { /* Recreate a deleted panel. */ } }
         const msg = await send(c.apply, body); store.set('applicationPanel', msg.id); return reply('Application panel posted.');
       }
-      if (id === 'apply') return i.reply({ content: `Read <#${c.rules}> before applying. Choose the account you will join with:`, components: [row(button('edition:java','Java'),button('edition:bedrock','Bedrock'))], flags: ephemeral });
+      if (id === 'apply') return i.reply({ content: `Read <#${c.rules}> before applying. Submitting your application confirms you agree to follow the SMP rules. Choose the account you will join with:`, components: [row(button('edition:java','Java'),button('edition:bedrock','Bedrock'))], flags: ephemeral });
       if (id.startsWith('edition:')) {
         if (store.one("SELECT id FROM applications WHERE user_id=? AND state IN ('pending','approved','ready')", i.user.id)) throw new Error('You already have a pending or accepted application. Use /status.');
         const edition = id.split(':')[1]; if (!['java','bedrock'].includes(edition)) return;
         return i.showModal(applicationForm(edition));
       }
+      if (['application-single:java','application-single:bedrock'].includes(id)) {
+        const data = { edition: id.split(':')[1], rules: 'yes' };
+        for (const key of ['username','age','heard','why','youtube']) data[key] = i.fields.getTextInputValue(key).trim();
+        const appId = submit(store, i.user.id, data, c.cooldown);
+        store.run('DELETE FROM drafts WHERE user_id=?', i.user.id);
+        return reply(`Application submitted to staff. Reference: ${appId.slice(0,8)}. Use /status for updates.`);
+      }
+      // Honor forms and drafts already open when the bot was upgraded.
       if (['application:java','application:bedrock'].includes(id)) {
         const data = { edition: id.split(':')[1] };
         for (const key of ['username','age','rules','heard','why']) data[key] = i.fields.getTextInputValue(key).trim();
