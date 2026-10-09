@@ -34,16 +34,13 @@ export function decide(store, id, reviewer, approve, reason = '', now = Date.now
     if (approve) store.queue(`whitelist:${id}`, 'whitelist', { applicationId: id, edition: r.edition, username: r.username });
   });
 }
-export function joining(c) {
-  const lines = [
-    '🎉 **WELCOME TO KIND SMP!**', '',
-    '✅ Your application has been **approved** and your Minecraft account is **whitelisted!**', '',
-    '🌎 **JOIN THE SMP**'
-  ];
-  if (c.java) lines.push(`💻 **Java:** \`${c.java}\``);
-  if (c.bedrock) lines.push(`📱 **Bedrock:** \`${c.bedrock}\``, `🔌 **Port:** \`${c.bedrockPort}\``);
-  if (!c.java && !c.bedrock) lines.push('⚠️ The server address has not been added yet. Please ask staff for the address.');
-  if (c.joinInstructions) lines.push('', c.joinInstructions);
-  lines.push('', '📌 **BEFORE YOU START**', `📜 **Read the rules:** <#${c.rules}>`, '👋 **Introduce yourself:** <#1556383760209944586>', '🧩 **Get the required mods:** <#1556063965069709423>', '', 'First, check the mods channel so you know what to install. Then head over to the introduction channel and tell everyone a little about yourself so the KIND SMP community can welcome you! 💙', '', '✨ Have fun, be kind, and welcome to **KIND SMP!**');
+export function joining(c, whitelisted = true) {
+  const lines = [whitelisted
+    ? 'Welcome to Kind SMP! Your application is approved and your Minecraft account is whitelisted.'
+    : 'Welcome to Kind SMP! Your application is approved. Minecraft whitelisting is still pending; we will DM you again when your account is whitelisted.'];
+  if (c.java) lines.push('Java: ' + c.java);
+  if (c.bedrock) lines.push('Bedrock: ' + c.bedrock + ' • Port: ' + c.bedrockPort);
+  if (!c.java && !c.bedrock) lines.push('The server address has not been added yet. Please ask staff for the address.');
+  lines.push('Rules: <#' + c.rules + '>');
   return lines.join('\n');
 }

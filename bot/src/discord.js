@@ -3,6 +3,7 @@ import { Client, GatewayIntentBits, MessageFlags, PermissionFlagsBits, SlashComm
   EmbedBuilder } from 'discord.js';
 import { submit, decide, joining } from './applications.js';
 import { quotaDay, channelTarget } from './youtube.js';
+import { createNotifications } from './notifications.js';
 import { createHash } from 'node:crypto';
 
 const ephemeral = MessageFlags.Ephemeral;
@@ -28,6 +29,7 @@ const youtubeForm = () => form('application:youtube', 'Kind SMP application · 2
 
 export function createDiscord(store, c, yt) {
   const client = new Client({ intents: [GatewayIntentBits.Guilds], allowedMentions: { parse: [] } });
+  const notifications = createNotifications(store, c, client);
   async function staff(i) {
     if (i.guildId !== c.guild) throw new Error('Use this command in the Kind SMP Discord server.');
     const member = await i.guild.members.fetch({ user: i.user.id, force: true });
@@ -48,6 +50,8 @@ export function createDiscord(store, c, yt) {
   const commands = [
     new SlashCommandBuilder().setName('setup').setDescription('Staff: post the Kind SMP application panel'),
     new SlashCommandBuilder().setName('apply').setDescription('Apply to join Kind SMP or apply again with a new Minecraft account'),
+    new SlashCommandBuilder().setName('join').setDescription('Privately DM me the server address and joining instructions'),
+    new SlashCommandBuilder().setName('resend-welcome').setDescription('Staff: resend a member’s private server-address DM').addUserOption(o=>o.setName('member').setDescription('Approved member').setRequired(true)),
     new SlashCommandBuilder().setName('status').setDescription('Check your application and joining instructions'),
     new SlashCommandBuilder().setName('youtube').setDescription('Check your automatically linked YouTube channel'),
     new SlashCommandBuilder().setName('link-youtube').setDescription('Staff: approve a channel link for an accepted member').addUserOption(o=>o.setName('member').setDescription('Accepted member').setRequired(true)).addStringOption(o=>o.setName('channel').setDescription('YouTube channel URL or @handle').setRequired(true)),
@@ -74,7 +78,7 @@ export function createDiscord(store, c, yt) {
     userLocks.add(i.user.id);
     try {
       const id = i.customId || i.commandName;
-      if (['setup','health','retry','unlink-youtube','link-youtube'].includes(id) || /^(approve|reject|rejection):/.test(id)) {
+      if (['setup','health','retry','unlink-youtube','link-youtube','resend-welcome'].includes(id) || /^(approve|reject|rejection):/.test(id)) {
         // Button-to-modal responses must be immediate; the staff check still uses a fresh REST fetch.
         if (!id.startsWith('reject:')) await i.deferReply({ flags: ephemeral });
         await staff(i);
@@ -121,15 +125,29 @@ export function createDiscord(store, c, yt) {
         store.run('DELETE FROM drafts WHERE user_id=?', i.user.id);
         return reply(`Application submitted to staff. Reference: ${appId.slice(0,8)}. Use /status for updates.`);
       }
-      if (id.startsWith('approve:')) { decide(store,id.slice(8),i.user.id,true); return reply('Approved. The whitelist request is saved with no expiry. If the SMP is running, the plugin will add this player automatically; if it is offline, processing resumes when it starts. No second approval is needed. Membership and joining instructions follow after whitelisting succeeds.'); }
+      if (id.startsWith('approve:')) { decide(store,id.slice(8),i.user.id,true); return reply('Approved. The whitelist request is saved with no expiry. If the SMP is running, the plugin will add this player automatically; if it is offline, processing resumes when it starts. No second approval is needed. An approval DM with the server address will be attempted shortly if the address is configured. A second welcome DM follows successful whitelisting. Use /resend-welcome to retry a member’s DM.'); }
       if (id.startsWith('reject:')) return i.showModal(form(`rejection:${id.slice(7)}`, 'Reason for rejecting', [['reason','Reason shown to the applicant',1000,true]]));
       if (id.startsWith('rejection:')) { decide(store,id.slice(10),i.user.id,false,i.fields.getTextInputValue('reason')); return reply('Application rejected with your reason.'); }
+      if (id === 'join' || id === 'resend-welcome') {
+        if (!i.deferred) await i.deferReply({flags:ephemeral});
+        const userId = id === 'join' ? i.user.id : i.options.getUser('member',true).id;
+        const app = store.one("SELECT * FROM applications WHERE user_id=? AND state IN ('approved','ready') ORDER BY created DESC,rowid DESC LIMIT 1",userId);
+        if (!app) throw new Error('A staff-approved application is required before joining details can be sent.');
+        const last = store.get('dmManual:' + app.id,0);
+        if (Date.now()-last < 30000) throw new Error('Wait 30 seconds before requesting another welcome DM.');
+        store.set('dmManual:' + app.id,Date.now());
+        const result = await notifications.deliver(app,true);
+        const messages = {sent:'The server address and joining instructions were sent by private DM.', 'missing-address':'The server address for this Minecraft edition is not configured. Staff must set JAVA_ADDRESS or BEDROCK_ADDRESS in Railway.', blocked:'Discord blocked the private DM. Enable direct messages from server members and make sure the bot is not blocked, then use /join again. /status also provides a reply visible only to you.', failed:'The private DM could not be sent. A retry is queued; staff can check /health.', busy:'A private DM is already being sent. Please wait a moment.'};
+        return reply(messages[result.status] || 'Please try again shortly.');
+      }
       if (id === 'status') {
         const app = store.one('SELECT * FROM applications WHERE user_id=? ORDER BY created DESC, rowid DESC LIMIT 1', i.user.id);
         if (!app) return reply('You have not applied yet. Use /apply.');
-        const state = { pending:'Your submitted application is saved and waiting for staff review. It does not expire after 30 minutes.',approved:'Approved by staff. Your whitelist request is saved with no expiry. The plugin adds you automatically while the SMP is running, or resumes when it starts again. No need to reapply. If it stays pending while the SMP is online, staff can check /health for a connection or account lookup error.',ready:joining(c),rejected:`Rejected: ${app.reason}\nYou may reapply <t:${Math.ceil((app.decided+c.cooldown)/1000)}:R>.` }[app.state];
+        const state = { pending:'Your submitted application is saved and waiting for staff review. It does not expire after 30 minutes.',approved:'Approved by staff. Your whitelist request is saved with no expiry. The plugin adds you automatically while the SMP is running, or resumes when it starts again. No need to reapply. If it stays pending while the SMP is online, staff can check /health for a connection or account lookup error.',ready:joining(c, true, app.username),rejected:`Rejected: ${app.reason}\nYou may reapply <t:${Math.ceil((app.decided+c.cooldown)/1000)}:R>.` }[app.state];
+        const dm = store.get(notifications.keyFor(app),{});
+        const dmStatus = ['approved','ready'].includes(app.state) ? '\nPrivate DM: ' + (dm.status || (app.dm_done === 1 ? 'sent' : app.dm_done === 2 ? 'blocked' : 'queued')) + '. Use /join to send it again.' : '';
         const current = store.one("SELECT username FROM applications WHERE user_id=? AND state='ready'", i.user.id);
-        return reply(state + (current && app.state !== 'ready' ? '\nYour current account (' + current.username + ') remains accepted.' : app.state === 'ready' ? '\nGot a new Minecraft account? Use /apply to submit a new application for staff review.' : ''));
+        return reply(state + dmStatus + (current && app.state !== 'ready' ? '\nYour current account (' + current.username + ') remains accepted.' : app.state === 'ready' ? '\nGot a new Minecraft account? Use /apply to submit a new application for staff review.' : ''));
       }
       if (id === 'youtube' || id === 'verify') {
         const creator=store.one('SELECT data FROM creators WHERE user_id=?',i.user.id);
@@ -156,7 +174,7 @@ export function createDiscord(store, c, yt) {
       }
       if (id === 'health') {
         const seen = store.get('bridgeSeen',0), jobs = store.all("SELECT id,kind,attempts,error FROM jobs WHERE state<>'done' LIMIT 10");
-        return reply(`Minecraft last connected: ${seen ? `<t:${Math.floor(seen/1000)}:R>` : 'never'}\nYouTube units today: ${store.one('SELECT used FROM quota WHERE day=?',quotaDay())?.used || 0}/${c.dailyBudget}\nCreators: ${store.one('SELECT count(*) AS n FROM creators').n}/${c.maxCreators}\nLast Discord error: ${store.get('discordError','none')}\nLast YouTube error: ${store.get('youtubeError','none')}\nPending jobs:\n${jobs.map(j=>`${j.id} · ${j.kind} · attempts ${j.attempts}${j.error ? ' · '+j.error : ''}`).join('\n') || 'none'}`.slice(0,1950));
+        return reply(`Minecraft last connected: ${seen ? `<t:${Math.floor(seen/1000)}:R>` : 'never'}\nServer addresses: Java ${c.java ? 'configured' : 'MISSING JAVA_ADDRESS'}, Bedrock ${c.bedrock ? 'configured' : 'MISSING BEDROCK_ADDRESS'}\nLast DM error: ${store.get('dmError','none')}\nYouTube units today: ${store.one('SELECT used FROM quota WHERE day=?',quotaDay())?.used || 0}/${c.dailyBudget}\nCreators: ${store.one('SELECT count(*) AS n FROM creators').n}/${c.maxCreators}\nLast Discord error: ${store.get('discordError','none')}\nLast YouTube error: ${store.get('youtubeError','none')}\nPending jobs:\n${jobs.map(j=>`${j.id} · ${j.kind} · attempts ${j.attempts}${j.error ? ' · '+j.error : ''}`).join('\n') || 'none'}`.slice(0,1950));
       }
       if (id === 'retry') { store.run("UPDATE jobs SET until=0 WHERE id=? AND state='queued'",i.options.getString('job',true)); return reply('Queued job is eligible to retry. Use /health to check the result.'); }
       if (id === 'unlink-youtube') {
@@ -179,6 +197,7 @@ export function createDiscord(store, c, yt) {
   });
   async function maintenance() {
     if (!client.isReady()) return;
+    await notifications.maintenance();
     store.run('DELETE FROM drafts WHERE expires<?',Date.now());
     store.run('DELETE FROM verifications WHERE expires<?',Date.now());
     for (const [id,time] of starts) if (Date.now()-time>60000) starts.delete(id);
@@ -205,10 +224,6 @@ export function createDiscord(store, c, yt) {
     for (const creator of store.all('SELECT * FROM creators WHERE role_done=0 LIMIT 20')) {
       try { const member = await guild.members.fetch(creator.user_id); await member.roles.add(c.youtubeRole,'YouTube channel linked through staff-approved application'); store.run('UPDATE creators SET role_done=1 WHERE user_id=?',creator.user_id); }
       catch (e) { store.set('discordError',`YouTuber role assignment failed (Discord ${e.code || 'error'}).`); }
-    }
-    for (const app of store.all("SELECT * FROM applications WHERE state IN ('ready','rejected') AND dm_done=0 LIMIT 20")) {
-      try { const user = await client.users.fetch(app.user_id); await user.send({content:app.state === 'ready' ? joining(c) : `Your Kind SMP application was rejected.\nReason: ${app.reason}\nYou can reapply <t:${Math.ceil((app.decided+c.cooldown)/1000)}:R>.`,allowedMentions:{parse:[]}}); store.run('UPDATE applications SET dm_done=1 WHERE id=?',app.id); }
-      catch (e) { if (e.code === 50007 || e.code === 10013) { store.run('UPDATE applications SET dm_done=2 WHERE id=?',app.id); store.post(`dm-failed:${app.id}`,c.log,{content:`Could not DM applicant <@${app.user_id}>. They can use /status to see the decision and joining instructions.`}); } else throw e; }
     }
     for (const p of store.all('SELECT * FROM posts WHERE message_id IS NULL AND next_try<? LIMIT 20',Date.now())) {
       try { const msg = await send(p.channel,JSON.parse(p.body),p.key); store.run('UPDATE posts SET message_id=? WHERE key=?',msg.id,p.key); }
