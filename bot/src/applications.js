@@ -13,10 +13,13 @@ export function validateApplication(a) {
 export function submit(store, userId, input, cooldown, now = Date.now()) {
   const a = validateApplication(input);
   return store.transaction(() => {
-    if (store.one("SELECT id FROM applications WHERE user_id=? AND state IN ('pending','approved','ready')", userId)) throw new Error('You already have a pending or accepted application. Use /status.');
+    if (store.one("SELECT id FROM applications WHERE user_id=? AND state IN ('pending','approved')", userId)) throw new Error('You already have an application awaiting review or whitelisting. Use /status.');
     const denied = store.one("SELECT decided FROM applications WHERE user_id=? AND state='rejected' ORDER BY decided DESC LIMIT 1", userId);
     if (denied && now < denied.decided + cooldown) throw new Error(`You can reapply <t:${Math.ceil((denied.decided + cooldown) / 1000)}:R>.`);
     if (store.one("SELECT id FROM applications WHERE edition=? AND username=? COLLATE NOCASE AND state IN ('pending','approved','ready')", a.edition, a.username)) throw new Error('That Minecraft account already has an active application. Ask staff if this is a mistake.');
+    const previous = store.one("SELECT edition,username FROM applications WHERE user_id=? AND state='ready'", userId);
+    if (previous) a.previousAccount = { edition: previous.edition, username: previous.username };
+    else delete a.previousAccount;
     const id = randomUUID();
     store.run('INSERT INTO applications(id,user_id,edition,username,answers,created) VALUES (?,?,?,?,?,?)', id, userId, a.edition, a.username, JSON.stringify(a), now);
     return id;

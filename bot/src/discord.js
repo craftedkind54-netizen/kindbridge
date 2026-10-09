@@ -47,7 +47,7 @@ export function createDiscord(store, c, yt) {
   }
   const commands = [
     new SlashCommandBuilder().setName('setup').setDescription('Staff: post the Kind SMP application panel'),
-    new SlashCommandBuilder().setName('apply').setDescription('Apply to join Kind SMP'),
+    new SlashCommandBuilder().setName('apply').setDescription('Apply to join Kind SMP or apply again with a new Minecraft account'),
     new SlashCommandBuilder().setName('status').setDescription('Check your application and joining instructions'),
     new SlashCommandBuilder().setName('youtube').setDescription('Check your automatically linked YouTube channel'),
     new SlashCommandBuilder().setName('link-youtube').setDescription('Staff: approve a channel link for an accepted member').addUserOption(o=>o.setName('member').setDescription('Accepted member').setRequired(true)).addStringOption(o=>o.setName('channel').setDescription('YouTube channel URL or @handle').setRequired(true)),
@@ -85,14 +85,14 @@ export function createDiscord(store, c, yt) {
           const role = await guild.roles.fetch(roleId);
           if (!role || role.managed || me.roles.highest.comparePositionTo(role) <= 0 || !me.permissions.has(PermissionFlagsBits.ManageRoles)) throw new Error('Move the bot role above SMP Member and YouTuber, and give it Manage Roles.');
         }
-        const body = { content: `## Welcome to Kind SMP\nApply to join our Java and Bedrock SMP. You must be **13 or older**.\nRead <#${c.rules}> first. Answers are shared with staff in a private review channel.\nOne pending application per person. Reapply ${c.cooldown / 3600000} hours after rejection.\nApply and add your optional YouTube channel in one form. By submitting, you agree to follow the SMP rules. The supplied channel is linked automatically after staff approval and whitelisting.`, components: [row(button('edition:java','Apply · Java'), button('edition:bedrock','Apply · Bedrock'))] };
+        const body = { content: `## Welcome to Kind SMP\nApply to join our Java and Bedrock SMP. You must be **13 or older**.\nRead <#${c.rules}> first. Answers are shared with staff in a private review channel.\nNew Minecraft account? Use /apply again; staff approval is required. One pending application per person. Reapply ${c.cooldown / 3600000} hours after rejection.\nApply and add your optional YouTube channel in one form. By submitting, you agree to follow the SMP rules. The supplied channel is linked automatically after staff approval and whitelisting.`, components: [row(button('edition:java','Apply · Java'), button('edition:bedrock','Apply · Bedrock'))] };
         const panelId = store.get('applicationPanel');
         if (panelId) { try { const ch = await client.channels.fetch(c.apply); const m = await ch.messages.fetch(panelId); await m.edit(body); return reply('Application panel updated.'); } catch { /* Recreate a deleted panel. */ } }
         const msg = await send(c.apply, body); store.set('applicationPanel', msg.id); return reply('Application panel posted.');
       }
-      if (id === 'apply') return i.reply({ content: `Read <#${c.rules}> before applying. Submitting your application confirms you agree to follow the SMP rules. Choose the account you will join with:`, components: [row(button('edition:java','Java'),button('edition:bedrock','Bedrock'))], flags: ephemeral });
+      if (id === 'apply') return i.reply({ content: `Read <#${c.rules}> before applying. Submitting your application confirms you agree to follow the SMP rules. Already a member with a new account? Apply again here. Your current membership stays active during review. Existing YouTube links are retained; ask staff to change your channel. Choose the account you will join with:`, components: [row(button('edition:java','Java'),button('edition:bedrock','Bedrock'))], flags: ephemeral });
       if (id.startsWith('edition:')) {
-        if (store.one("SELECT id FROM applications WHERE user_id=? AND state IN ('pending','approved','ready')", i.user.id)) throw new Error('You already have a pending or accepted application. Use /status.');
+        if (store.one("SELECT id FROM applications WHERE user_id=? AND state IN ('pending','approved')", i.user.id)) throw new Error('You already have an application awaiting review or whitelisting. Use /status.');
         const edition = id.split(':')[1]; if (!['java','bedrock'].includes(edition)) return;
         return i.showModal(applicationForm(edition));
       }
@@ -125,10 +125,11 @@ export function createDiscord(store, c, yt) {
       if (id.startsWith('reject:')) return i.showModal(form(`rejection:${id.slice(7)}`, 'Reason for rejecting', [['reason','Reason shown to the applicant',1000,true]]));
       if (id.startsWith('rejection:')) { decide(store,id.slice(10),i.user.id,false,i.fields.getTextInputValue('reason')); return reply('Application rejected with your reason.'); }
       if (id === 'status') {
-        const app = store.one('SELECT * FROM applications WHERE user_id=? ORDER BY created DESC LIMIT 1', i.user.id);
+        const app = store.one('SELECT * FROM applications WHERE user_id=? ORDER BY created DESC, rowid DESC LIMIT 1', i.user.id);
         if (!app) return reply('You have not applied yet. Use /apply.');
         const state = { pending:'Your submitted application is saved and waiting for staff review. It does not expire after 30 minutes.',approved:'Approved by staff. Your whitelist request is saved with no expiry. The plugin adds you automatically while the SMP is running, or resumes when it starts again. No need to reapply. If it stays pending while the SMP is online, staff can check /health for a connection or account lookup error.',ready:joining(c),rejected:`Rejected: ${app.reason}\nYou may reapply <t:${Math.ceil((app.decided+c.cooldown)/1000)}:R>.` }[app.state];
-        return reply(state);
+        const current = store.one("SELECT username FROM applications WHERE user_id=? AND state='ready'", i.user.id);
+        return reply(state + (current && app.state !== 'ready' ? '\nYour current account (' + current.username + ') remains accepted.' : app.state === 'ready' ? '\nGot a new Minecraft account? Use /apply to submit a new application for staff review.' : ''));
       }
       if (id === 'youtube' || id === 'verify') {
         const creator=store.one('SELECT data FROM creators WHERE user_id=?',i.user.id);
@@ -187,12 +188,13 @@ export function createDiscord(store, c, yt) {
       const embed = new EmbedBuilder().setColor(0x65b891).setTitle(`Kind SMP application · ${app.id.slice(0,8)}`)
         .setDescription(`Applicant: <@${app.user_id}>\nEdition: ${app.edition}`)
         .addFields({name:'Minecraft username',value:app.username},{name:'Age',value:a.age},{name:'Agrees to rules',value:a.rules},{name:'How they heard about us',value:a.heard},{name:'Why they want to join',value:a.why},{name:'YouTube channel (optional)',value:a.youtube || 'Not provided'});
+      if (a.previousAccount) embed.addFields({name:'Account change', value: a.previousAccount.edition + ': ' + a.previousAccount.username + ' → ' + app.edition + ': ' + app.username + '. Current membership stays active until whitelisting succeeds. Staff must remove the old whitelist entry if needed. Existing YouTube links are retained.'});
       const msg = await send(c.log,{embeds:[embed],components:[row(button(`approve:${app.id}`,'Approve',ButtonStyle.Success),button(`reject:${app.id}`,'Reject with reason',ButtonStyle.Danger))]},`application:${app.id}`);
       store.run('UPDATE applications SET log_id=? WHERE id=?',msg.id,app.id);
     }
     for (const app of store.all("SELECT * FROM applications WHERE state<>'pending' AND notification_done=0 AND log_id IS NOT NULL LIMIT 20")) {
       const ch = await client.channels.fetch(c.log);
-      try { const msg = await ch.messages.fetch(app.log_id); const embeds=msg.embeds.map(e=>EmbedBuilder.from(e).setFields(e.fields.map(f=>f.name.startsWith('YouTube') ? {...f,name:'YouTube channel (optional)'} : f))); await msg.edit({embeds,components:[],content:`${app.state === 'rejected' ? 'Rejected' : 'Approved'} by <@${app.reviewer}>${app.reason ? '\nReason: '+app.reason : app.state === 'ready' ? '\nWhitelisting completed by the Minecraft server.' : '\nWhitelist request saved with no expiry. Automatically processed when the SMP is running.'}`,allowedMentions:{parse:[]}}); }
+      try { const msg = await ch.messages.fetch(app.log_id); const embeds=msg.embeds.map(e=>EmbedBuilder.from(e).setFields(e.fields.map(f=>f.name.startsWith('YouTube') ? {...f,name:'YouTube channel (optional)'} : f))); await msg.edit({embeds,components:[],content:`${app.state === 'superseded' ? 'Replaced by a newer accepted account' : app.state === 'rejected' ? 'Rejected' : 'Approved'} by <@${app.reviewer}>${app.reason ? '\nReason: '+app.reason : app.state === 'superseded' ? '\nStaff: remove the old Minecraft whitelist entry if needed.' : app.state === 'ready' ? '\nWhitelisting completed by the Minecraft server.' : '\nWhitelist request saved with no expiry. Automatically processed when the SMP is running.'}`,allowedMentions:{parse:[]}}); }
       catch (e) { if (e.code !== 10008) throw e; }
       store.run('UPDATE applications SET notification_done=1 WHERE id=? AND state=?',app.id,app.state);
     }
