@@ -1,6 +1,8 @@
-# Kind SMP — bot 1.0.2
+# Kind SMP — bot 1.0.3
 
-Current YouTube linking and upgrade steps: [Update 1.0.2](docs/UPDATE-1.0.2.md). Minecraft Bridge 1.0.1 remains compatible.
+Single-form upgrade: [Update 1.0.3](docs/UPDATE-1.0.3.md).
+
+Previous YouTube linking and upgrade steps: [Update 1.0.2](docs/UPDATE-1.0.2.md). Minecraft Bridge 1.0.1 remains compatible.
 
 A Discord application bot for Railway and a companion Minecraft plugin for **Paper 1.21.11 / Java 21**, with **Geyser + Floodgate** and your existing **CreatorScoreboard 1.0.0**.
 
@@ -8,7 +10,7 @@ Start with [the setup guide](docs/SETUP.md). This is source code and a compiled 
 
 ## Included
 
-- Your six questions, split across two Discord forms. YouTube is optional.
+- One application form with Minecraft username, age, how you heard about us, why you want to join, and an optional YouTube channel link. Submitting confirms agreement to the SMP rules.
 - Minimum age 13, agreement to rules, one active application per Discord user and Minecraft account, and 24 hours before reapplying after rejection.
 - Staff-only approval and rejection; rejection requires a reason shown to the applicant.
 - Persistent approval queue. The plugin resolves the Java account or Floodgate gamertag, whitelists its UUID, and acknowledges completion. The bot then grants membership and sends joining instructions. `/status` works when DMs are closed.
