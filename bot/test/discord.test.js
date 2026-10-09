@@ -79,3 +79,15 @@ for (const changes of [{age:'12'}, {youtube:'https://example.com/channel'}]) {
     assert.match(f.responses.at(-1).content, /at least 13|YouTube channel URL/);
   });
 }
+
+test('Accepted member can open the same form and submit a new account through Discord',async t=>{
+  const f=fixture(t); f.s.run("UPDATE applications SET state='ready',uuid=? WHERE id=?",'12345678-1234-1234-1234-123456789012',f.app);
+  f.i.user.id='applicant'; f.i.customId='edition:bedrock'; let modal;
+  f.i.showModal=async value=>{modal=value.toJSON();}; await f.handle(f.i);
+  assert.equal(modal.custom_id,'application-single:bedrock');
+  f.i.customId=modal.custom_id;
+  const values={username:'New Xbox',age:'18',heard:'Already a member',why:'New account',youtube:''};
+  f.i.fields={getTextInputValue:key=>values[key]}; await f.handle(f.i);
+  assert.match(f.responses.at(-1).content,/Application submitted/);
+  assert.equal(f.s.one("SELECT count(*) AS n FROM applications WHERE user_id='applicant'").n,2);
+});

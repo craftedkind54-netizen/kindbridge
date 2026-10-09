@@ -31,6 +31,12 @@ export class Store {
         message_id TEXT, attempts INTEGER DEFAULT 0, next_try INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS quota (day TEXT PRIMARY KEY, used INTEGER NOT NULL);
     `);
+    if (!this.get('accountReapplicationsV1', false)) {
+      this.transaction(() => {
+        this.db.exec("DROP INDEX IF EXISTS active_user; CREATE UNIQUE INDEX active_user ON applications(user_id) WHERE state IN ('pending','approved'); CREATE UNIQUE INDEX IF NOT EXISTS ready_user ON applications(user_id) WHERE state='ready';");
+        this.set('accountReapplicationsV1', true);
+      });
+    }
     if (!this.get('youtubeApprovalLabelsV1',false)) {
       this.run("UPDATE applications SET notification_done=0 WHERE state<>'pending'");
       this.set('youtubeApprovalLabelsV1',true);
@@ -69,7 +75,17 @@ export class Store {
         if (!/^[0-9a-f-]{36}$/i.test(result.uuid || '')) throw new Error('Missing resolved player UUID');
         const existing = this.one("SELECT id FROM applications WHERE uuid=? AND id<>? AND state IN ('approved','ready')", result.uuid, payload.applicationId);
         if (existing) throw new Error('This Minecraft account is already assigned to another member');
+        const app = this.one("SELECT * FROM applications WHERE id=? AND state='approved'", payload.applicationId);
+        if (!app) throw new Error('Application is no longer awaiting whitelisting');
+        const creator = this.one('SELECT * FROM creators WHERE user_id=?', app.user_id);
+        this.run("UPDATE applications SET state='superseded',notification_done=0 WHERE user_id=? AND state='ready'", app.user_id);
         this.run("UPDATE applications SET state='ready',uuid=?,notification_done=0 WHERE id=? AND state='approved'", result.uuid, payload.applicationId);
+        if (creator) {
+          this.run("UPDATE jobs SET state='cancelled' WHERE kind='creator' AND state IN ('queued','leased') AND json_extract(payload,'$.uuid')=?", creator.uuid);
+          if (creator.uuid !== result.uuid) this.queue('account-unlink:' + app.id, 'unlink', {uuid: creator.uuid});
+          this.run('UPDATE creators SET uuid=?,minecraft_name=? WHERE user_id=?', result.uuid, app.username, app.user_id);
+          this.queue('account-creator:' + app.id, 'creator', {...JSON.parse(creator.data), uuid: result.uuid, minecraftName: app.username, refreshedAt: creator.refreshed, nextRefreshAt: creator.refreshed + 7*86400000});
+        }
       }
       return true;
     });

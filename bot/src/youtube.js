@@ -134,6 +134,8 @@ export class YouTube {
         const likes = videos.reduce((sum, v) => sum + Number(v.statistics?.likeCount || 0), 0);
         const data = this.channelData(channel, likes), now = Date.now();
         this.s.transaction(() => {
+          const current = this.s.one('SELECT uuid,channel_id FROM creators WHERE user_id=?', creator.user_id);
+          if (!current || current.uuid !== creator.uuid || current.channel_id !== creator.channel_id) return;
           this.s.run('UPDATE creators SET data=?,refreshed=? WHERE user_id=?', JSON.stringify(data), now, creator.user_id);
           this.s.queue(`creator:${creator.user_id}:${now}`, 'creator', { uuid: creator.uuid, minecraftName: creator.minecraft_name, ...data, refreshedAt: now, nextRefreshAt: now + WEEK });
         });

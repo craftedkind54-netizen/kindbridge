@@ -185,3 +185,65 @@ test('Failed whitelist lookup retries within a minute and does not block another
   assert.equal(s.lease(now+59999),null);
   assert.equal(s.lease(now+60000).id,first.id);
 });
+
+test('Members can reapply while their current account stays accepted until whitelisting succeeds',t=>{
+  const s=store(t), old=ready(s);
+  const replacement=submit(s,'u',input({username:'NewAccount'}),86400000);
+  assert.equal(s.one('SELECT state FROM applications WHERE id=?',old).state,'ready');
+  assert.deepEqual(JSON.parse(s.one('SELECT answers FROM applications WHERE id=?',replacement).answers).previousAccount,{edition:'java',username:'KindPlayer'});
+  assert.throws(()=>submit(s,'u',input({username:'ThirdAccount'}),0),/awaiting review/);
+  assert.throws(()=>submit(s,'other',input({username:'NewAccount'}),0),/already/);
+  decide(s,replacement,'staff',true);
+  assert.throws(()=>submit(s,'u',input({username:'ThirdAccount'}),0),/awaiting review/);
+  const job=s.lease();
+  s.ack(job.id,job.lease,true,{uuid:'22345678-1234-1234-1234-123456789012'});
+  assert.equal(s.one('SELECT state FROM applications WHERE id=?',old).state,'superseded');
+  assert.equal(s.one('SELECT state FROM applications WHERE id=?',replacement).state,'ready');
+  assert.ok(submit(s,'u',input({edition:'bedrock',username:'New Xbox'}),0));
+});
+test('Rejected or failed account changes preserve membership and enforce cooldown',t=>{
+  const s=store(t), old=ready(s), now=Date.now();
+  assert.throws(()=>submit(s,'u',input(),0),/already has an active/);
+  const rejected=submit(s,'u',input({username:'NewAccount'}),0,now);
+  decide(s,rejected,'staff',false,'Please confirm ownership.',now);
+  assert.equal(s.one('SELECT state FROM applications WHERE id=?',old).state,'ready');
+  assert.throws(()=>submit(s,'u',input({username:'NewAccount'}),86400000,now+1),/reapply/);
+  const replacement=submit(s,'u',input({username:'NewAccount'}),0,now+2);
+  decide(s,replacement,'staff',true); const job=s.lease();
+  s.ack(job.id,job.lease,false,{},'Lookup unavailable');
+  assert.equal(s.one('SELECT state FROM applications WHERE id=?',old).state,'ready');
+  assert.equal(s.one('SELECT state FROM applications WHERE id=?',replacement).state,'approved');
+});
+test('Successful account change moves creator identity and cached stats to the new account',t=>{
+  const s=store(t); ready(s);
+  s.run('INSERT INTO creators(user_id,channel_id,uuid,minecraft_name,data,verified_at,refreshed) VALUES (?,?,?,?,?,?,?)','u',channel,uuid,'KindPlayer',JSON.stringify({channelId:channel,channelName:'Kind',subscribers:100}),1,10);
+  s.queue('old-stats','creator',{uuid});
+  const replacement=submit(s,'u',input({username:'NewAccount'}),0); decide(s,replacement,'staff',true);
+  const oldStats=s.lease(), job=s.lease();
+  const nextUuid='22345678-1234-1234-1234-123456789012';
+  s.ack(job.id,job.lease,true,{uuid:nextUuid});
+  assert.equal(s.one('SELECT state FROM jobs WHERE id=?',oldStats.id).state,'cancelled');
+  assert.equal(s.ack(oldStats.id,oldStats.lease,true),false);
+  assert.equal(s.one('SELECT uuid FROM creators').uuid,nextUuid);
+  assert.equal(s.one('SELECT minecraft_name FROM creators').minecraft_name,'NewAccount');
+  assert.equal(s.lease().kind,'unlink');
+  const stats=s.lease(); assert.equal(stats.kind,'creator'); assert.equal(stats.payload.uuid,nextUuid); assert.equal(stats.payload.subscribers,100);
+});
+test('New account cannot claim another accepted member UUID',t=>{
+  const s=store(t); ready(s);
+  const other=submit(s,'other',input({username:'OtherAccount'}),0); decide(s,other,'staff',true);
+  let job=s.lease(); const otherUuid='22345678-1234-1234-1234-123456789012'; s.ack(job.id,job.lease,true,{uuid:otherUuid});
+  const replacement=submit(s,'u',input({username:'NewAccount'}),0); decide(s,replacement,'staff',true); job=s.lease();
+  assert.throws(()=>s.ack(job.id,job.lease,true,{uuid:otherUuid}),/already assigned/);
+  assert.equal(s.one("SELECT username FROM applications WHERE user_id='u' AND state='ready'").username,'KindPlayer');
+});
+test('Account reapplication migration and pending replacement survive restart',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'kind-reapply-')),path=join(dir,'db');
+  try {
+    let s=new Store(path); ready(s);
+    s.db.exec("DROP INDEX active_user; DROP INDEX ready_user; CREATE UNIQUE INDEX active_user ON applications(user_id) WHERE state IN ('pending','approved','ready'); DELETE FROM kv WHERE key='accountReapplicationsV1';"); s.close();
+    s=new Store(path); const replacement=submit(s,'u',input({username:'NewAccount'}),0); s.close();
+    s=new Store(path); assert.equal(s.one('SELECT state FROM applications WHERE id=?',replacement).state,'pending');
+    assert.equal(s.one("SELECT count(*) AS n FROM applications WHERE user_id='u' AND state='ready'").n,1); s.close();
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
