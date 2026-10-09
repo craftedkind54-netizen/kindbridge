@@ -147,7 +147,7 @@ test('Weekly updates use cached statistics and do not repeat before seven days',
 });
 test('Discord form respects five-component limit and unknown server address is explicit',()=>{
   assert.equal(applicationForm('java').toJSON().components.length,5);
-  assert.match(joining(config({})),/not added the server address/);
+  assert.match(joining(config({})),/server address has not been added/);
 });
 test('Signed notification updates reopen cached videos without repeated feed polling',t=>{
   const s=store(t),yt=new YouTube(s,config({}));
