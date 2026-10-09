@@ -1,4 +1,4 @@
-# Set up Kind SMP — bot 1.0.2
+# Set up Kind SMP — bot 1.0.3
 
 You will upload the source to your GitHub repository, run the bot on Railway, and put the companion JAR on your Paper server. Do not paste the whole project into one GitHub file; keep the included folders and filenames.
 
@@ -104,7 +104,7 @@ Until then, accepted players can still be whitelisted, but their welcome message
 ## 7. Start applications and test
 
 1. Give yourself the configured staff role and run `/setup` in Discord.
-2. Submit a test application with a real Java account. Verify all six answers appear only in the private form log.
+2. Submit a test application with a real Java account. Verify the application answers, optional YouTube link, and rules agreement appear only in the private form log.
 3. Approve it. Check `/health`, verify the account is on the whitelist, then confirm it receives the member role and welcome DM. With DMs closed, use `/status`.
 4. Test a Bedrock application with the real Xbox gamertag, spaces included and no Floodgate prefix. Confirm the player can join through Geyser.
 5. Reject a separate test application. Confirm a reason is required and reapplication is blocked for 24 hours. During testing only, `REAPPLY_HOURS=0` can disable the wait; restore 24 afterwards.

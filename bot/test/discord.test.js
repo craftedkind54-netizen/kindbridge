@@ -35,3 +35,47 @@ test('Staff rejection through the Discord modal requires a nonblank reason',asyn
   f.i.fields.getTextInputValue=()=> 'Please explain why you want to join.';
   await f.handle(f.i); assert.equal(f.s.one('SELECT state FROM applications').state,'rejected');
 });
+
+for (const edition of ['java', 'bedrock']) {
+  for (const youtube of ['', 'https://www.youtube.com/@KindCrafted']) {
+    test(edition + ' submits the application and optional YouTube link in one form: ' + youtube, async t => {
+      const f = fixture(t);
+      f.i.user.id = 'new-applicant';
+      f.i.customId = 'edition:' + edition;
+      let modal;
+      f.i.showModal = async value => { modal = value.toJSON(); };
+      await f.handle(f.i);
+      assert.equal(modal.components.length, 5);
+      assert.match(modal.components[0].description, /By submitting.*agree/);
+      const inputs = modal.components.map(label => label.component);
+      assert.deepEqual(inputs.map(input => input.custom_id), ['username','age','heard','why','youtube']);
+      assert.equal(inputs.at(-1).required, false);
+      const values = {username: edition === 'java' ? 'NewPlayer' : 'New Player', age:'18', heard:'A friend', why:'Build together', youtube};
+      f.i.customId = modal.custom_id;
+      f.i.isButton = () => false;
+      f.i.isModalSubmit = () => true;
+      f.i.fields = {getTextInputValue: key => values[key]};
+      await f.handle(f.i);
+      const saved = f.s.one('SELECT * FROM applications WHERE user_id=?', f.i.user.id);
+      assert.equal(saved.state, 'pending');
+      assert.equal(saved.edition, edition);
+      assert.deepEqual(JSON.parse(saved.answers), {...values, edition, rules:'yes'});
+      assert.equal(f.s.one('SELECT count(*) AS n FROM drafts').n, 0);
+      assert.match(f.responses.at(-1).content, /Application submitted/);
+      await f.handle(f.i);
+      assert.match(f.responses.at(-1).content, /already have/);
+    });
+  }
+}
+for (const changes of [{age:'12'}, {youtube:'https://example.com/channel'}]) {
+  test('Single form rejects invalid input: ' + JSON.stringify(changes), async t => {
+    const f = fixture(t);
+    f.i.user.id = 'new-applicant';
+    f.i.customId = 'application-single:java';
+    const values = {username:'NewPlayer',age:'18',heard:'Friend',why:'Build together',youtube:'',...changes};
+    f.i.fields = {getTextInputValue: key => values[key]};
+    await f.handle(f.i);
+    assert.equal(f.s.one('SELECT id FROM applications WHERE user_id=?', f.i.user.id), undefined);
+    assert.match(f.responses.at(-1).content, /at least 13|YouTube channel URL/);
+  });
+}
