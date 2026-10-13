@@ -68,9 +68,55 @@ export class YouTube {
     if (!response.ok) {
       const reason = body.error?.errors?.[0]?.reason || `HTTP ${response.status}`;
       if (['quotaExceeded', 'dailyLimitExceeded'].includes(reason)) this.s.set('quotaBlockedDay', quotaDay());
-      throw new Error(`YouTube request failed (${reason}).`);
+      throw Object.assign(new Error(`YouTube request failed (${reason}).`), {reason});
     }
     return body.items || [];
+  }
+  reportIssue(scope, message) {
+    const key = 'youtubeIssue:' + scope, previous = this.s.get(key, {});
+    if (!message) { this.s.set(key, {...previous, active:false}); return; }
+    this.s.set('youtubeError', scope + ': ' + message);
+    if (previous.active && previous.message === message) return;
+    const generation = (previous.generation || 0) + 1;
+    this.s.set(key, {active:true, message, generation});
+    this.s.post('youtube-issue:' + scope + ':' + generation, this.c.log, {content:'YouTube ' + scope + ' needs attention: ' + message});
+  }
+  async uploads(channelId, playlistId, knownChannel = null) {
+    const retryKey = 'playlistRetry:' + channelId;
+    if (this.s.get(retryKey,0) > Date.now()) return null;
+    let channel = knownChannel;
+    if (!playlistId) {
+      [channel] = await this.api('channels',{part:'contentDetails,statistics',id:channelId});
+      playlistId = channel?.contentDetails?.relatedPlaylists?.uploads;
+    }
+    if (channel?.statistics?.videoCount === '0' || channel?.statistics?.videoCount === 0) {
+      this.reportIssue('playlist:' + channelId,null);
+      return [];
+    }
+    try {
+      if (!playlistId) throw Object.assign(new Error('No uploads playlist is available.'),{reason:'playlistNotFound'});
+      let items;
+      try { items = await this.api('playlistItems',{part:'contentDetails',playlistId,maxResults:50}); }
+      catch (e) {
+        if (e.reason !== 'playlistNotFound') throw e;
+        // Re-resolve cached IDs from YouTube once, never guess a replacement ID.
+        if (!knownChannel) {
+          [channel] = await this.api('channels',{part:'contentDetails,statistics',id:channelId});
+          const fresh = channel?.contentDetails?.relatedPlaylists?.uploads;
+          if (fresh) this.s.run("UPDATE creators SET data=json_set(data,'$.uploadPlaylistId',?) WHERE channel_id=?",fresh,channelId);
+          if (channel?.statistics?.videoCount === '0' || channel?.statistics?.videoCount === 0) items = [];
+          else if (fresh && fresh !== playlistId) items = await this.api('playlistItems',{part:'contentDetails',playlistId:fresh,maxResults:50});
+          else throw e;
+        } else throw e;
+      }
+      this.s.set(retryKey,0); this.reportIssue('playlist:' + channelId,null);
+      return items;
+    } catch (e) {
+      if (!['playlistNotFound','playlistItemsNotAccessible'].includes(e.reason)) throw e;
+      this.s.set(retryKey,Date.now()+86400000);
+      this.reportIssue('playlist:' + channelId,'Uploads playlist is unavailable. Cached likes are retained; other channels keep updating. Retrying in 24 hours. Check that this channel has public uploads.');
+      return null;
+    }
   }
   async linkApproved(userId) {
     const app = this.s.one("SELECT * FROM applications WHERE user_id=? AND state='ready'", userId);
@@ -118,67 +164,73 @@ export class YouTube {
   }
   channelData(channel, likes = 0) {
     return { channelId: channel.id, channelName: channel.snippet.title, channelUrl: `https://www.youtube.com/channel/${channel.id}`,
-      uploadPlaylistId: channel.contentDetails.relatedPlaylists.uploads, profilePictureUrl: channel.snippet.thumbnails?.default?.url || '',
+      uploadPlaylistId: channel.contentDetails?.relatedPlaylists?.uploads || '', profilePictureUrl: channel.snippet.thumbnails?.default?.url || '',
       subscribers: Number(channel.statistics.subscriberCount || 0), uploads: Number(channel.statistics.videoCount || 0), likes };
   }
   async refreshStats() {
-    const due = this.s.all('SELECT * FROM creators WHERE refreshed<?', Date.now() - WEEK);
+    const now = Date.now();
+    const due = this.s.all('SELECT * FROM creators').filter(c =>
+      (c.refreshed < now-WEEK || this.s.get('likesStale:' + c.channel_id,false)) && this.s.get('statsRetry:' + c.channel_id,0) <= now);
     for (const group of chunks(due)) {
-      const channels = await this.api('channels', { part: 'snippet,statistics,contentDetails', id: group.map(c => c.channel_id).join(',') });
-      for (const channel of channels) {
-        const creator = group.find(c => c.channel_id === channel.id);
-        const playlist = channel.contentDetails.relatedPlaylists.uploads;
-        const uploads = await this.api('playlistItems', { part: 'contentDetails', playlistId: playlist, maxResults: 50 });
-        const ids = uploads.map(v => v.contentDetails.videoId).filter(Boolean);
-        const videos = ids.length ? await this.api('videos', { part: 'statistics', id: ids.join(',') }) : [];
-        const likes = videos.reduce((sum, v) => sum + Number(v.statistics?.likeCount || 0), 0);
-        const data = this.channelData(channel, likes), now = Date.now();
-        this.s.transaction(() => {
-          const current = this.s.one('SELECT uuid,channel_id FROM creators WHERE user_id=?', creator.user_id);
-          if (!current || current.uuid !== creator.uuid || current.channel_id !== creator.channel_id) return;
-          this.s.run('UPDATE creators SET data=?,refreshed=? WHERE user_id=?', JSON.stringify(data), now, creator.user_id);
-          this.s.queue(`creator:${creator.user_id}:${now}`, 'creator', { uuid: creator.uuid, minecraftName: creator.minecraft_name, ...data, refreshedAt: now, nextRefreshAt: now + WEEK });
-        });
+      const channels = await this.api('channels', {part:'snippet,statistics,contentDetails',id:group.map(c=>c.channel_id).join(',')});
+      for (const creator of group) {
+        const scope = 'stats:' + creator.channel_id;
+        try {
+          const channel = channels.find(c=>c.id === creator.channel_id);
+          if (!channel) throw new Error('Channel is unavailable. Check the linked channel.');
+          const uploads = await this.uploads(channel.id,channel.contentDetails?.relatedPlaylists?.uploads,channel);
+          let likes = Number(JSON.parse(creator.data).likes || 0);
+          if (uploads !== null) {
+            const ids = uploads.map(v=>v.contentDetails?.videoId).filter(Boolean);
+            const videos = ids.length ? await this.api('videos',{part:'statistics',id:ids.join(',')}) : [];
+            likes = videos.reduce((sum,v)=>sum+Number(v.statistics?.likeCount || 0),0);
+          }
+          const data = this.channelData(channel,likes), updated = Date.now();
+          this.s.transaction(()=>{
+            const current = this.s.one('SELECT uuid,channel_id FROM creators WHERE user_id=?',creator.user_id);
+            if (!current || current.uuid !== creator.uuid || current.channel_id !== creator.channel_id) return;
+            this.s.run('UPDATE creators SET data=?,refreshed=? WHERE user_id=?',JSON.stringify(data),updated,creator.user_id);
+            this.s.set('likesStale:' + channel.id,uploads === null);
+            this.s.set('statsRetry:' + channel.id,uploads === null ? updated+86400000 : 0);
+            this.s.queue('creator:' + creator.user_id + ':' + updated,'creator',{uuid:creator.uuid,minecraftName:creator.minecraft_name,...data,refreshedAt:updated,nextRefreshAt:updated+(uploads === null ? 86400000 : WEEK)});
+          });
+          this.reportIssue(scope,null);
+        } catch(e) {
+          this.s.set('statsRetry:' + creator.channel_id,Date.now()+3600000);
+          this.reportIssue(scope,e.message);
+        }
       }
     }
   }
   async feeds() {
-    const failures = [];
     for (const creator of this.s.all('SELECT * FROM creators')) {
       try {
         const r = await this.fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${creator.channel_id}`, { signal: AbortSignal.timeout(15000) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         this.ingest(feedEntries(await r.text()).filter(e => e.channel === creator.channel_id));
         this.s.set(`feedError:${creator.channel_id}`,null);
+        this.reportIssue('feed:' + creator.channel_id,null);
         continue;
       } catch { /* A missing or temporarily unavailable feed can use the uploads API instead. */ }
       const key = `feedFallback:${creator.channel_id}`;
       if (this.s.get(key,0) > Date.now()) {
-        const previousError = this.s.get(`feedError:${creator.channel_id}`);
-        if (previousError) failures.push(previousError);
         continue;
       }
       // Reserve before requesting, including failed attempts; persisted across deployments.
       this.s.set(key,Date.now()+30*60000);
       try {
         const data=JSON.parse(creator.data);
-        let playlistId=data.uploadPlaylistId;
-        if (!playlistId) {
-          const [channel]=await this.api('channels',{part:'contentDetails',id:creator.channel_id});
-          playlistId=channel?.contentDetails?.relatedPlaylists?.uploads;
-          if (!playlistId) throw new Error('The channel has no available uploads playlist.');
-          this.s.run('UPDATE creators SET data=json_set(data,\'$.uploadPlaylistId\',?) WHERE channel_id=?',playlistId,creator.channel_id);
-        }
-        const items=await this.api('playlistItems',{part:'contentDetails',playlistId,maxResults:50});
+        const items = await this.uploads(creator.channel_id,data.uploadPlaylistId);
+        if (items === null) continue;
         this.ingest(items.map(v=>({video:v.contentDetails?.videoId,channel:creator.channel_id})).filter(e=>/^[\w-]{11}$/.test(e.video || '')));
         this.s.set(`feedError:${creator.channel_id}`,null);
+        this.reportIssue('feed:' + creator.channel_id,null);
       } catch (e) {
         const error=`${creator.channel_id}: uploads API fallback failed (${e.message})`;
         this.s.set(`feedError:${creator.channel_id}`,error);
-        failures.push(error);
+        this.reportIssue('feed:' + creator.channel_id,error);
       }
     }
-    if (failures.length) throw new Error(`${failures.length} channel(s) could not refresh. ${failures[0]}`);
     if (String(this.s.get('youtubeError','')).startsWith('feeds:')) this.s.set('youtubeError',null);
   }
   ingest(entries, notification = false) {

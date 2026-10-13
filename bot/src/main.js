@@ -32,12 +32,11 @@ async function tick() {
       ]) {
         if (Date.now()-s.get(`tick:${name}`,0)<interval) continue;
         s.set(`tick:${name}`,Date.now());
-        try { await work(); }
+        try { await work(); yt.reportIssue(name,null); }
         catch (e) {
           s.set('youtubeError',`${name}: ${e.message}`);
           console.error(`YouTube ${name}:`,e.message);
-          const hour = Math.floor(Date.now()/3600000);
-          s.post(`youtube-error:${name}:${hour}`,c.log,{content:`YouTube ${name} needs attention: ${e.message}`});
+          yt.reportIssue(name,e.message);
         }
       }
     }
