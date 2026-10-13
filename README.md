@@ -1,4 +1,6 @@
-# Kind SMP — bot 1.0.5
+# Kind SMP — bot 1.0.6
+
+YouTube recovery update: [Update 1.0.6](docs/UPDATE-1.0.6.md).
 
 Private welcome-DM update: [Update 1.0.5](docs/UPDATE-1.0.5.md).
 
